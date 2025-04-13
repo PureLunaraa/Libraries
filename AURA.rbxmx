@@ -1,0 +1,280 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<External>null</External>
+	<External>nil</External>
+	<Item class="Folder" referent="RBX9B3117DD790D4F29A0609C1E957D0F46">
+		<Properties>
+			<BinaryString name="AttributesSerialize"></BinaryString>
+			<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+			<bool name="DefinesCapabilities">false</bool>
+			<string name="Name">AURA</string>
+			<int64 name="SourceAssetId">-1</int64>
+			<BinaryString name="Tags"></BinaryString>
+		</Properties>
+		<Item class="Script" referent="RBXE3EEEF13A5E7499BB9DE2D1BDE16E2C4">
+			<Properties>
+				<BinaryString name="AttributesSerialize"></BinaryString>
+				<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+				<bool name="DefinesCapabilities">false</bool>
+				<bool name="Disabled">false</bool>
+				<Content name="LinkedSource"><null></null></Content>
+				<string name="Name">Main</string>
+				<token name="RunContext">0</token>
+				<string name="ScriptGuid">{7008490D-7268-4BB4-80CF-930ED37064FF}</string>
+				<ProtectedString name="Source"><![CDATA[local scriptEditorService = game:GetService("ScriptEditorService")
+local studioService = game:GetService("StudioService")
+
+local Settings = require(script.Settings)
+
+local function getDefault()
+	local t = {}
+
+	for contractions, NameTypeValue in Settings do
+		local value = settings().Studio[NameTypeValue.Name]
+		t[NameTypeValue.Name] = value
+	end
+
+	return t
+end
+
+local function load(data)
+	for name, value in data do
+		settings().Studio[name] = value
+	end
+end
+
+local function convertValue(value, expectedType)
+	value = value:gsub("%s+", "")
+
+	if value == "default" then
+		return "Default"
+	end
+
+	if expectedType == "Color3" then
+		local r, g, b = value:match("(%d+),(%d+),(%d+)")
+		r = r or 0
+		g = g or 0
+		b = b or 0
+		if r and g and b then
+			return Color3.fromRGB(tonumber(r), tonumber(g), tonumber(b))
+		end
+
+		local hex = value:match("^#?(%x%x%x%x%x%x)$")
+		if hex then
+			local r, g, b = tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
+			return Color3.fromRGB(r, g, b)
+		end
+
+		local h, s, v = value:match("h(%d+)%s+(%d+)%s+(%d+)")
+		if h and s and v then
+			return Color3.fromHSV(tonumber(h) / 360, tonumber(s) / 100, tonumber(v) / 100)
+		end
+	elseif expectedType == "boolean" then
+		if value == "+" or value == "yes" or value == "true" then
+			return true
+		elseif value == "-" or value == "no" or value == "false" then
+			return false
+		end
+	end
+
+	return "Default"
+end
+
+local Default = getDefault()
+
+local function isSingleLineComment(line)
+	return line:find("^%-%-") ~= nil
+end
+
+local function isMultiLineCommentStart(line)
+	return line:find("^%-%-%[%[") ~= nil
+end
+
+local function isMultiLineCommentEnd(line)
+	return line:find("%]%]$") ~= nil
+end
+
+local function checkLinesForComment(doc, startLine)
+	for ScrollLine = startLine, 1, -1 do
+		local newLineText = doc:GetLine(ScrollLine)
+		if isMultiLineCommentEnd(newLineText) then
+			return false
+		end
+
+		if isMultiLineCommentStart(newLineText) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local AppliedSettings = {}
+
+local function applySettingsForAll()
+	for contraction, value in AppliedSettings do
+		settings().Studio[Settings[contraction].Name] = value
+	end
+end
+
+local function textChanged(doc, changes)
+	local insideMultiLineComment = false
+	local totalLines = doc:GetLineCount()
+	local hasChangesApplied = false
+	
+	local Found = {}
+	local ModifiedSettings = {}
+
+	for _, change in ipairs(changes) do
+
+		local foundInComment = false
+		local commentLine = 0
+		local startLine = change.range.start.line
+		local endLine = change.range["end"].line
+
+		startLine = math.max(1, startLine)
+		endLine = math.min(totalLines, endLine)
+
+		for lineNumber = startLine, endLine do
+			local lineText = doc:GetLine(lineNumber)
+
+			if lineText:find("%$") then
+				if lineText:match("^%-%-.*%$") then
+					foundInComment = true
+					commentLine = lineNumber
+				elseif lineText:match("^%-%-%[%[.*%$") then
+					foundInComment = true
+					commentLine = lineNumber
+				elseif lineText:match(".*%$%]%]$") then
+					foundInComment = checkLinesForComment(doc, lineNumber - 1)
+					commentLine = lineNumber	
+				else
+					foundInComment = checkLinesForComment(doc, lineNumber - 1)
+					commentLine = lineNumber	
+				end
+			end
+		end
+
+		if foundInComment then
+			local lineText = doc:GetLine(commentLine)
+			local contraction, value = lineText:match("%$%s*([^:]+)%s*:%s*([^;]*)")
+
+			if contraction and value then
+				contraction = contraction:lower():gsub("%s+", "")
+				if Settings[contraction] then
+					local convertedValue = convertValue(value, Settings[contraction].type)
+					if convertedValue == "Default" then
+						convertedValue = Default[Settings[contraction].Name]
+					end
+
+					if convertedValue then
+						AppliedSettings[contraction] = convertedValue
+						ModifiedSettings[contraction] = true
+					end
+				end
+			elseif not value and contraction then
+				Found[contraction] = nil
+			end
+		end
+	end
+	
+	for contraction, value in AppliedSettings do
+		if not ModifiedSettings[contraction] then
+			local defaultValue = Default[Settings[contraction].Name]
+			AppliedSettings[contraction] = defaultValue
+			hasChangesApplied = true
+		end
+	end
+	
+	if hasChangesApplied then
+		applySettingsForAll()
+	end
+end
+
+local function checkScriptForSettings(doc)
+	local totalLines = doc:GetLineCount()
+	local changes = {}
+	for line = 1, totalLines do
+		local lineText = doc:GetLine(line)
+
+		if lineText:find("%$") then
+			table.insert(changes, { range = { start = { line = line }, ["end"] = { line = line } } })
+		end
+	end
+
+	if #changes > 0 then
+		textChanged(doc, changes)
+	end
+end
+
+local scriptEditingConnection = nil
+
+local function onActiveScriptChanged()
+	if scriptEditingConnection then
+		scriptEditingConnection:Disconnect()
+		scriptEditingConnection = nil
+	else
+		Default = getDefault()
+	end
+
+	local activeScript = studioService.ActiveScript
+	if activeScript then
+		local textDocument = scriptEditorService:FindScriptDocument(activeScript)
+		table.clear(AppliedSettings)
+
+		checkScriptForSettings(textDocument)
+		if textDocument then
+			scriptEditingConnection = scriptEditorService.TextDocumentDidChange:Connect(function(doc, change)
+				if textDocument == doc then
+					textChanged(doc, change)
+				end
+			end)
+		end
+	else
+		load(Default)
+	end
+end
+
+studioService:GetPropertyChangedSignal("ActiveScript"):Connect(onActiveScriptChanged)
+onActiveScriptChanged()
+
+plugin.Unloading:Connect(function()
+	if scriptEditingConnection then
+		scriptEditingConnection:Disconnect()
+		scriptEditingConnection = nil
+	end
+end)
+]]></ProtectedString>
+				<int64 name="SourceAssetId">-1</int64>
+				<BinaryString name="Tags"></BinaryString>
+			</Properties>
+			<Item class="ModuleScript" referent="RBX68F2B3FE91BB47D4AB4D7299488AC8CF">
+				<Properties>
+					<BinaryString name="AttributesSerialize"></BinaryString>
+					<SecurityCapabilities name="Capabilities">0</SecurityCapabilities>
+					<bool name="DefinesCapabilities">false</bool>
+					<Content name="LinkedSource"><null></null></Content>
+					<string name="Name">Settings</string>
+					<string name="ScriptGuid">{BF99FCBE-EA18-4E80-84E4-E0487FDCFC07}</string>
+					<ProtectedString name="Source"><![CDATA[local EditorSettings = {
+	tc = {Name = "Text Color", type = "Color3", Value = Color3.fromRGB(204, 204, 204)},
+	bgc = {Name = "Background Color", type = "Color3", Value = Color3.fromRGB(37, 37, 37)},
+	sc = {Name = "Selection Color", type = "Color3", Value = Color3.fromRGB(255, 255, 255)},
+	sbgc = {Name = "Selection Background Color", type = "Color3", Value = Color3.fromRGB(11, 90, 175)},
+	opc = {Name = "Operator Color", type = "Color3", Value = Color3.fromRGB(204, 204, 204)},
+	nc = {Name = "Number Color", type = "Color3", Value = Color3.fromRGB(255, 198, 0)},
+	strc = {Name = "String Color", type = "Color3", Value = Color3.fromRGB(173, 241, 149)},
+	cc = {Name = "Comment Color", type = "Color3", Value = Color3.fromRGB(102, 102, 102)},
+	kwc = {Name = "Keyword Color", type = "Color3", Value = Color3.fromRGB(248, 109, 124)},
+	errc = {Name = "Error Color", type = "Color3", Value = Color3.fromRGB(255, 0, 0)},
+	warnc = {Name = "Warning Color", type = "Color3", Value = Color3.fromRGB(255, 115, 21)},
+	builtInFnC = {Name = "Built-in Function Color", type = "Color3", Value = Color3.fromRGB(132, 214, 247)},
+}
+
+return EditorSettings]]></ProtectedString>
+					<int64 name="SourceAssetId">-1</int64>
+					<BinaryString name="Tags"></BinaryString>
+				</Properties>
+			</Item>
+		</Item>
+	</Item>
+</roblox>
